@@ -1,0 +1,25 @@
+test	group	n_target	n_background	median_target_rank	median_bg_rank	statistic	p_value	effect_size_r	significant	note
+Mann-Whitney U	ALL_PRAD_TARGET vs BG	142	17651	4378.0	8953.0	670619.0	6.0932544838540625e-22	0.0716	YES	rank낮을수록 중요. effect r=0.072 (small)
+Mann-Whitney U	ergPRAD_TARGET vs BG	17	17651	3170.0	8953.0	44526.0	2.5908784326933343e-07	0.0378	YES	rank낮을수록 중요. effect r=0.038 (small)
+Mann-Whitney U	PRAD_TARGET vs BG	125	17651	4530.0	8953.0	626093.0	3.561078281778149e-17	0.0626	YES	rank낮을수록 중요. effect r=0.063 (small)
+KS test	ALL_PRAD_TARGET vs BG	142	17651	4378.0	8953.0	0.4613	6.822500068370231e-27	0.4613	YES	KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+KS test	ergPRAD_TARGET vs BG	17	17651	3170.0	8953.0	0.6788	1.0162721938109717e-07	0.6788	YES	KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+KS test	PRAD_TARGET vs BG	125	17651	4530.0	8953.0	0.444	4.1317359891955794e-22	0.444	YES	KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+Fisher's exact (top 1%)	ALL_PRAD_TARGET	142	17651	4378.0	-	14.7742	6.328698863653469e-14	11.972	YES	top1%(rank<=178): obs=17/142 (12.0%), exp=1.4, fold=11.97x, OR=14.77
+Fisher's exact (top 1%)	ergPRAD_TARGET	17	17776	3170.0	-	31.1264	2.0815838032371043e-05	23.529	YES	top1%(rank<=178): obs=4/17 (23.5%), exp=0.2, fold=23.53x, OR=31.13
+Fisher's exact (top 1%)	PRAD_TARGET	125	17668	4530.0	-	12.3127	3.742230567264393e-10	10.4	YES	top1%(rank<=178): obs=13/125 (10.4%), exp=1.2, fold=10.40x, OR=12.31
+Fisher's exact (top 5%)	ALL_PRAD_TARGET	142	17651	4378.0	-	4.1465	3.528892589979226e-08	3.521	YES	top5%(rank<=890): obs=25/142 (17.6%), exp=7.1, fold=3.52x, OR=4.15
+Fisher's exact (top 5%)	ergPRAD_TARGET	17	17776	3170.0	-	7.9524	0.0011573077839771941	5.882	YES	top5%(rank<=890): obs=5/17 (29.4%), exp=0.9, fold=5.88x, OR=7.95
+Fisher's exact (top 5%)	PRAD_TARGET	125	17668	4530.0	-	3.6777	3.8068236525338844e-06	3.2	YES	top5%(rank<=890): obs=20/125 (16.0%), exp=6.2, fold=3.20x, OR=3.68
+Fisher's exact (top 10%)	ALL_PRAD_TARGET	142	17651	4378.0	-	2.5392	2.2969976925399283e-05	2.183	YES	top10%(rank<=1780): obs=31/142 (21.8%), exp=14.2, fold=2.18x, OR=2.54
+Fisher's exact (top 10%)	ergPRAD_TARGET	17	17776	3170.0	-	6.3182	0.0007797578697219834	4.118	YES	top10%(rank<=1780): obs=7/17 (41.2%), exp=1.7, fold=4.12x, OR=6.32
+Fisher's exact (top 10%)	PRAD_TARGET	125	17668	4530.0	-	2.1532	0.0013121703672196237	1.92	YES	top10%(rank<=1780): obs=24/125 (19.2%), exp=12.5, fold=1.92x, OR=2.15
+Fisher's exact (top 20%)	ALL_PRAD_TARGET	142	17651	4378.0	-	1.4663	0.030810848046874152	1.338	YES	top20%(rank<=3559): obs=38/142 (26.8%), exp=28.4, fold=1.34x, OR=1.47
+Fisher's exact (top 20%)	ergPRAD_TARGET	17	17776	3170.0	-	4.5082	0.0025709085904424174	2.647	YES	top20%(rank<=3559): obs=9/17 (52.9%), exp=3.4, fold=2.65x, OR=4.51
+Fisher's exact (top 20%)	PRAD_TARGET	125	17668	4530.0	-	1.2099	0.2137979133456735	1.16	NO	top20%(rank<=3559): obs=29/125 (23.2%), exp=25.0, fold=1.16x, OR=1.21
+Permutation test (10,000x)	ALL_PRAD_TARGET	142	17651	4378.0	8918.7	-9.5186	0.0	9.5186	YES	obs_mean=4797.3, perm_mean=8918.7+/-433.0, Z=-9.519, p=0.00000
+Permutation test (10,000x)	ergPRAD_TARGET	17	17776	3170.0	8937.1	-5.0211	0.0	5.0211	YES	obs_mean=2661.9, perm_mean=8937.1+/-1249.8, Z=-5.021, p=0.00000
+Permutation test (10,000x)	PRAD_TARGET	125	17668	4530.0	8909.5	-8.3281	0.0	8.3281	YES	obs_mean=5087.7, perm_mean=8909.5+/-458.9, Z=-8.328, p=0.00000
+GSEA-style ES (1000 perm)	ALL_PRAD_TARGET	142	17651	4378.0	8953.0	1.1294	0.0	0.7212	YES	ES=0.7212, NES=1.1294, p=0.0000 [NES>0: 상위 농축]
+GSEA-style ES (1000 perm)	ergPRAD_TARGET	17	17776	3170.0	8905.5	1.2014	0.058	0.7874	NO	ES=0.7874, NES=1.2014, p=0.0580 [NES>0: 상위 농축]
+GSEA-style ES (1000 perm)	PRAD_TARGET	125	17668	4530.0	8944.5	1.1049	0.017	0.7057	YES	ES=0.7057, NES=1.1049, p=0.0170 [NES>0: 상위 농축]

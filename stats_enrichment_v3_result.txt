@@ -1,0 +1,189 @@
+====================================================================================================
+  전립선암 표적 유전자 GAT+RWR v3 랭킹 상위 농축 통계 분석 리포트
+  입력: node_importance_v3_annotated.tsv
+====================================================================================================
+  유전자 총 수 : 17,793
+  표적 유전자  : 142 (ergPRAD특화: 17, 일반PRAD: 125)
+  배경 유전자  : 17,651
+  Permutation  : 10,000회 (seed=42)
+====================================================================================================
+
+-- Mann-Whitney U ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET vs BG
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=8953.0
+      stat=670619.0, p=6.09e-22, effect=0.0716
+      rank낮을수록 중요. effect r=0.072 (small)
+  [*** SIGNIFICANT ***] ergPRAD_TARGET vs BG
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=8953.0
+      stat=44526.0, p=2.59e-07, effect=0.0378
+      rank낮을수록 중요. effect r=0.038 (small)
+  [*** SIGNIFICANT ***] PRAD_TARGET vs BG
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=8953.0
+      stat=626093.0, p=3.56e-17, effect=0.0626
+      rank낮을수록 중요. effect r=0.063 (small)
+
+-- KS test ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET vs BG
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=8953.0
+      stat=0.4613, p=6.82e-27, effect=0.4613
+      KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+  [*** SIGNIFICANT ***] ergPRAD_TARGET vs BG
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=8953.0
+      stat=0.6788, p=1.02e-07, effect=0.6788
+      KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+  [*** SIGNIFICANT ***] PRAD_TARGET vs BG
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=8953.0
+      stat=0.444, p=4.13e-22, effect=0.444
+      KS D-stat: 표적 CDF가 배경보다 좌측 편향 = 상위 농축
+
+-- Fisher's exact (top 1%) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=-
+      stat=14.7742, p=6.33e-14, effect=11.972
+      top1%(rank<=178): obs=17/142 (12.0%), exp=1.4, fold=11.97x, OR=14.77
+  [*** SIGNIFICANT ***] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=-
+      stat=31.1264, p=2.08e-05, effect=23.529
+      top1%(rank<=178): obs=4/17 (23.5%), exp=0.2, fold=23.53x, OR=31.13
+  [*** SIGNIFICANT ***] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=-
+      stat=12.3127, p=3.74e-10, effect=10.4
+      top1%(rank<=178): obs=13/125 (10.4%), exp=1.2, fold=10.40x, OR=12.31
+
+-- Fisher's exact (top 5%) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=-
+      stat=4.1465, p=3.53e-08, effect=3.521
+      top5%(rank<=890): obs=25/142 (17.6%), exp=7.1, fold=3.52x, OR=4.15
+  [*** SIGNIFICANT ***] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=-
+      stat=7.9524, p=1.16e-03, effect=5.882
+      top5%(rank<=890): obs=5/17 (29.4%), exp=0.9, fold=5.88x, OR=7.95
+  [*** SIGNIFICANT ***] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=-
+      stat=3.6777, p=3.81e-06, effect=3.2
+      top5%(rank<=890): obs=20/125 (16.0%), exp=6.2, fold=3.20x, OR=3.68
+
+-- Fisher's exact (top 10%) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=-
+      stat=2.5392, p=2.30e-05, effect=2.183
+      top10%(rank<=1780): obs=31/142 (21.8%), exp=14.2, fold=2.18x, OR=2.54
+  [*** SIGNIFICANT ***] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=-
+      stat=6.3182, p=7.80e-04, effect=4.118
+      top10%(rank<=1780): obs=7/17 (41.2%), exp=1.7, fold=4.12x, OR=6.32
+  [*** SIGNIFICANT ***] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=-
+      stat=2.1532, p=1.31e-03, effect=1.92
+      top10%(rank<=1780): obs=24/125 (19.2%), exp=12.5, fold=1.92x, OR=2.15
+
+-- Fisher's exact (top 20%) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=-
+      stat=1.4663, p=3.08e-02, effect=1.338
+      top20%(rank<=3559): obs=38/142 (26.8%), exp=28.4, fold=1.34x, OR=1.47
+  [*** SIGNIFICANT ***] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=-
+      stat=4.5082, p=2.57e-03, effect=2.647
+      top20%(rank<=3559): obs=9/17 (52.9%), exp=3.4, fold=2.65x, OR=4.51
+  [    not significant] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=-
+      stat=1.2099, p=2.14e-01, effect=1.16
+      top20%(rank<=3559): obs=29/125 (23.2%), exp=25.0, fold=1.16x, OR=1.21
+
+-- Permutation test (10,000x) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=8918.7
+      stat=-9.5186, p=0.00e+00, effect=9.5186
+      obs_mean=4797.3, perm_mean=8918.7+/-433.0, Z=-9.519, p=0.00000
+  [*** SIGNIFICANT ***] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=8937.1
+      stat=-5.0211, p=0.00e+00, effect=5.0211
+      obs_mean=2661.9, perm_mean=8937.1+/-1249.8, Z=-5.021, p=0.00000
+  [*** SIGNIFICANT ***] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=8909.5
+      stat=-8.3281, p=0.00e+00, effect=8.3281
+      obs_mean=5087.7, perm_mean=8909.5+/-458.9, Z=-8.328, p=0.00000
+
+-- GSEA-style ES (1000 perm) ------------------------------------------------------------
+  [*** SIGNIFICANT ***] ALL_PRAD_TARGET
+      n_target=142, median_rank(target)=4378.0, median_rank(bg)=8953.0
+      stat=1.1294, p=0.00e+00, effect=0.7212
+      ES=0.7212, NES=1.1294, p=0.0000 [NES>0: 상위 농축]
+  [    not significant] ergPRAD_TARGET
+      n_target=17, median_rank(target)=3170.0, median_rank(bg)=8905.5
+      stat=1.2014, p=5.80e-02, effect=0.7874
+      ES=0.7874, NES=1.2014, p=0.0580 [NES>0: 상위 농축]
+  [*** SIGNIFICANT ***] PRAD_TARGET
+      n_target=125, median_rank(target)=4530.0, median_rank(bg)=8944.5
+      stat=1.1049, p=1.70e-02, effect=0.7057
+      ES=0.7057, NES=1.1049, p=0.0170 [NES>0: 상위 농축]
+
+====================================================================================================
+  Top-k% 내 표적 유전자 Fold Enrichment
+====================================================================================================
+
+  [ALL_PRAD_TARGET (142)]
+  top 1%(rank<=  178):  17/142 (12.0%) | exp=1.4 | fold=11.97x
+  top 5%(rank<=  890):  25/142 (17.6%) | exp=7.1 | fold=3.52x
+  top10%(rank<= 1780):  31/142 (21.8%) | exp=14.2 | fold=2.18x
+  top20%(rank<= 3559):  38/142 (26.8%) | exp=28.4 | fold=1.34x
+  top30%(rank<= 5338):  98/142 (69.0%) | exp=42.6 | fold=2.30x
+  top50%(rank<= 8897): 127/142 (89.4%) | exp=71.0 | fold=1.79x
+
+  [ergPRAD_TARGET  (17)]
+  top 1%(rank<=  178):   4/17 (23.5%) | exp=0.2 | fold=23.53x
+  top 5%(rank<=  890):   5/17 (29.4%) | exp=0.8 | fold=5.88x
+  top10%(rank<= 1780):   7/17 (41.2%) | exp=1.7 | fold=4.12x
+  top20%(rank<= 3559):   9/17 (52.9%) | exp=3.4 | fold=2.65x
+  top30%(rank<= 5338):  16/17 (94.1%) | exp=5.1 | fold=3.14x
+  top50%(rank<= 8897):  17/17 (100.0%) | exp=8.5 | fold=2.00x
+
+  [PRAD_TARGET     (125)]
+  top 1%(rank<=  178):  13/125 (10.4%) | exp=1.2 | fold=10.40x
+  top 5%(rank<=  890):  20/125 (16.0%) | exp=6.2 | fold=3.20x
+  top10%(rank<= 1780):  24/125 (19.2%) | exp=12.5 | fold=1.92x
+  top20%(rank<= 3559):  29/125 (23.2%) | exp=25.0 | fold=1.16x
+  top30%(rank<= 5338):  82/125 (65.6%) | exp=37.5 | fold=2.19x
+  top50%(rank<= 8897): 110/125 (88.0%) | exp=62.5 | fold=1.76x
+
+====================================================================================================
+  ergPRAD 특화 유전자 순위표 (rank 기준)
+====================================================================================================
+    rank  gene            visit_prob  annotation_preview
+  ------  ------------  ------------  --------------------------------------------------
+      10  BRD4              0.000728  Drugs: JQ1 (tool compound) [BETi]; OTX015 (birabresib); ABBV-075 (
+      40  ERG               0.000462  Drugs: indirect via BET inhibitors (JQ1, OTX015, ABBV-744), EZH2 i
+      62  BRD3              0.000441  Drugs: JQ1, OTX015, birabresib [BET inhibitors]
+     115  BRD2              0.000403  Drugs: JQ1, OTX015, ABBV-075, ABBV-744 [BET inhibitors]
+     552  CHD1              0.000318  Drugs: AR inhibitors (enzalutamide sensitization in CHD1-deleted P
+    1346  SPDEF             0.000271  Drugs: AR inhibitors (enzalutamide, apalutamide) indirectly
+    1609  KDM1A             0.000255  Drugs: ORY-1001 (iadademstat) [LSD1i]; GSK-2879552; CC-90011; INCB
+    2176  CCND1             0.000210  Drugs: palbociclib (Ibrance), ribociclib (Kisqali), abemaciclib (V
+    3170  TMPRSS2           0.000101  Drugs: enzalutamide, apalutamide (suppress AR-driven TMPRSS2)
+    3623  MYC               0.000062  Drugs: BET inhibitors suppress MYC (JQ1, OTX015, ABBV-744, PLX5110
+    3913  STAT3             0.000030  Drugs: napabucasin (BBI608) [STAT3/cancer stem cell inhibitor]; si
+    4035  NCOR1             0.000025  Drugs: enzalutamide resistance biomarker; no direct drug; AR inhib
+    4098  EZH2              0.000023  Drugs: tazemetostat (Tazverik) [EZH2i, FDA-approved]; GSK126, EPZ-
+    4124  PTEN              0.000022  Drugs: ipatasertib (AKTi, PTEN-loss + ARSi context), capivasertib 
+    4700  PIK3CB            0.000016  Drugs: GSK2636771, AZD8186 [PI3Kbeta-selective inhibitors]; clinic
+    4719  E2F1              0.000016  Drugs: CDK4/6 inhibitors reduce E2F1 activity (palbociclib, abemac
+    6961  E2F3              0.000012  Drugs: CDK4/6 inhibitors (palbociclib, ribociclib); BET inhibitors
+
+====================================================================================================
+  종합 결론
+====================================================================================================
+  유의한 검정 수: 22 / 24
+
+  >> ergPRAD 특화 17개 유전자:
+     - 중앙 rank 3170 vs 배경 8953 (Mann-Whitney U p=2.59e-07)
+     - Permutation Z=-5.021, p=0.00000
+     - GSEA NES=1.201 (p=0.0580)
+
+  >> 전체 표적 142개 유전자:
+     - 중앙 rank 4378 vs 배경 8953 (Mann-Whitney U p=6.09e-22)
+
+  --> 전립선암 표적 유전자들은 GAT+RWR v3 랭킹에서 무작위보다 유의미하게 상위에 농축됨
+      (pairwise GGA 기반 이종 네트워크 + GAT hub score 가중 RWR의 생물학적 타당성 통계 지지)
+====================================================================================================

@@ -1,25 +1,35 @@
 """
-Network RWR ver3: GAT + RWR (새 A/B/C 데이터 기반)
-=====================================================
+Network RWR ver3: GAT + RWR (새 A/B/C 데이터 기반, GPU 지원)
+==============================================================
 ver2 대비 변경점:
   - _A_ (GGA): ERG-gene 단일 벡터 → gene-gene pairwise absPearsonR 행렬
     (TMPRSS2-ERG PRAD TCGA 발현 기반, 3,267,720 쌍, threshold=0.3)
   - _B_ (PPI): 동일 (9606.ppi.physical, 1,477,610 rows)
   - _C_ (DGT): 동일 (CIViC drug-gene target, 1,628 rows)
-  - 결과 저장: node_importance_v3.tsv (rank / node / node_type /
-                visit_count / visit_prob / degree / gat_hub_score)
+  - GPU 지원: CUDA 자동 감지, 모든 Tensor/Model을 device로 이동
+  - 결과 저장: node_importance_v3.tsv
 
 [GGA 로드 방식 변경]
   기존: gene | absPearsonR  (ERG 기준 단방향)
   신규: gene_A | gene_B | pearsonR | absPearsonR  (pairwise 양방향)
-  → build_heterogeneous_network()의 GGA 추가 로직을 pairwise 방식으로 전면 교체
+
+[GPU 지원]
+  - CUDA 사용 가능 시 자동으로 GPU 사용 (device = cuda:0)
+  - X, edge_index, edge_attr, node_types, degree_src 전부 .to(device)
+  - RWR은 CPU multiprocessing 유지 (numpy 기반)
+
+[RWR 최적화 (v3 개선)]
+  - neighbor_cache를 글로벌 변수로 공유 → IPC pickle 직렬화 제거
+  - neighbor_cache 인덱스 기반 (노드명 → 정수 idx) → dict 룩업 최소화
+  - nbrs/probs를 numpy array로 저장 → rng.choice 속도 향상
+  - n_workers = cpu_count() 자동 최대화
 
 [파이프라인]
   데이터 로드 + 이종 네트워크 구성
-    → 그래프 → Tensor 변환 (X, edge_index, edge_attr)
-    → GAT 학습 (200 epochs, patience=20, Early Stopping)
-    → Attention 추출 → 전이 확률 혼합 캐시
-    → RWR 시뮬레이션 (멀티프로세싱, n_workers=12)
+    → 그래프 → Tensor 변환 → .to(device)
+    → GAT 학습 (GPU, 200 epochs, patience=20)
+    → Attention 추출 (GPU→CPU)
+    → 전이 확률 캐시 → RWR (CPU multiprocessing, global cache)
     → 결과 저장
 
 [GAT 아키텍처] (ver2 동일)
@@ -48,42 +58,84 @@ import torch.nn.functional as F
 warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════════
+# GPU / CPU 장치 자동 감지
+# ══════════════════════════════════════════════════════════
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(f"[Device] {DEVICE}" + (f"  ({torch.cuda.get_device_name(0)})" if DEVICE.type == "cuda" else "  (CPU)"))
+
+# OOM 방지: expandable_segments 활성화
+if DEVICE.type == "cuda":
+    import os as _os
+    _os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
+# ══════════════════════════════════════════════════════════
 # [멀티프로세싱 워커] 모듈 최상위 정의 필수 (Windows pickle)
 # ══════════════════════════════════════════════════════════
-_shared_counter = None
+# 글로벌 공유 변수: pickle 직렬화 없이 fork/spawn 후 공유
+_shared_counter   = None   # 진행 카운터 (Value)
+_g_nbrs_arr       = None   # 노드별 이웃 idx 배열 (list of np.ndarray)
+_g_probs_arr      = None   # 노드별 전이 확률 배열 (list of np.ndarray)
+_g_walk_len       = None
+_g_restart_prob   = None
+_g_n_walks        = None
 
-def _init_worker(shared_val):
-    """Pool initializer: 공유 카운터를 워커 전역 변수에 주입."""
-    global _shared_counter
+
+def _init_worker(shared_val, nbrs_arr, probs_arr, walk_len, restart_prob, n_walks):
+    """Pool initializer: 공유 데이터를 글로벌 변수에 주입."""
+    global _shared_counter, _g_nbrs_arr, _g_probs_arr
+    global _g_walk_len, _g_restart_prob, _g_n_walks
     _shared_counter = shared_val
+    _g_nbrs_arr     = nbrs_arr
+    _g_probs_arr    = probs_arr
+    _g_walk_len     = walk_len
+    _g_restart_prob = restart_prob
+    _g_n_walks      = n_walks
 
 
-def _walk_worker(args: tuple) -> Counter:
-    """단일 워커 RWR 시뮬레이션."""
-    chunk_nodes, neighbor_cache, n_walks, walk_length, restart_prob, worker_seed = args
-    rng   = np.random.default_rng(worker_seed)
+def _walk_worker(chunk_node_idxs: list) -> Counter:
+    """
+    단일 워커 RWR 시뮬레이션 (인덱스 기반, 글로벌 캐시 사용).
+    chunk_node_idxs: 이 워커가 담당하는 노드 인덱스 리스트
+    """
+    rng   = np.random.default_rng()   # 워커마다 독립 시드
     local = Counter()
 
-    for start_node in chunk_nodes:
-        nbrs, probs = neighbor_cache[start_node]
+    nbrs_arr     = _g_nbrs_arr
+    probs_arr    = _g_probs_arr
+    walk_len     = _g_walk_len
+    restart_prob = _g_restart_prob
+    n_walks      = _g_n_walks
+
+    if nbrs_arr is None:
+        # Windows spawn: 글로벌이 None이면 args 기반 방식으로 fallback 불가 → 에러 방지
+        return local
+
+    for start_idx in chunk_node_idxs:
+        s_nbrs  = nbrs_arr[start_idx]
+        s_probs = probs_arr[start_idx]
+        has_nbr = (s_nbrs is not None and len(s_nbrs) > 0)
+
         for _ in range(n_walks):
-            current   = start_node
-            cur_nbrs  = nbrs
-            cur_probs = probs
-            for _ in range(walk_length):
-                local[current] += 1
-                if rng.random() < restart_prob:
-                    current, cur_nbrs, cur_probs = start_node, nbrs, probs
+            cur = start_idx
+            c_nbrs  = s_nbrs
+            c_probs = s_probs
+            c_has   = has_nbr
+            for _ in range(walk_len):
+                local[cur] += 1
+                if rng.random() < restart_prob or not c_has:
+                    cur    = start_idx
+                    c_nbrs = s_nbrs
+                    c_probs= s_probs
+                    c_has  = has_nbr
                     continue
-                if cur_nbrs is None:
-                    current, cur_nbrs, cur_probs = start_node, nbrs, probs
-                    continue
-                idx       = rng.choice(len(cur_nbrs), p=cur_probs)
-                current   = cur_nbrs[idx]
-                cur_nbrs, cur_probs = neighbor_cache[current]
-        if _shared_counter is not None:
-            with _shared_counter.get_lock():
-                _shared_counter.value += n_walks
+                cur     = int(c_nbrs[rng.choice(len(c_nbrs), p=c_probs)])
+                c_nbrs  = nbrs_arr[cur]
+                c_probs = probs_arr[cur]
+                c_has   = (c_nbrs is not None and len(c_nbrs) > 0)
+
+    if _shared_counter is not None:
+        with _shared_counter.get_lock():
+            _shared_counter.value += len(chunk_node_idxs) * n_walks
     return local
 
 
@@ -260,18 +312,30 @@ def graph_to_tensors(G: nx.Graph):
         srcs.append(i); dsts.append(j); attrs.append(feat)
         srcs.append(j); dsts.append(i); attrs.append(feat)
 
+    # edge_index / edge_attr: GPU 메모리 절약 위해 CPU pin_memory로 유지
+    # (GAT forward 내 청크 단위로 GPU 전송)
     edge_index = torch.tensor([srcs, dsts], dtype=torch.long)
     edge_attr  = torch.tensor(attrs, dtype=torch.float32)
-    X_t        = torch.tensor(X, dtype=torch.float32)
+    X_t        = torch.tensor(X, dtype=torch.float32).to(DEVICE)
     node_types = torch.tensor(
         [0 if G.nodes[n].get("node_type", "gene") == "gene" else 1
          for n in node_list],
         dtype=torch.long
-    )
+    ).to(DEVICE)
+
+    # edge_index는 scatter 연산에 필요하므로 GPU로 올림 (long, 상대적으로 작음)
+    # edge_index: (2, 7M) × 8bytes = ~112MB → GPU OK
+    # edge_attr:  (7M, 5) × 4bytes = ~140MB  → GPU OK (float32)
+    edge_index = edge_index.to(DEVICE)
+    edge_attr  = edge_attr.to(DEVICE)
 
     print(f"[Tensor] X:{tuple(X_t.shape)}  "
           f"edge_index:{tuple(edge_index.shape)}  "
-          f"edge_attr:{tuple(edge_attr.shape)}")
+          f"edge_attr:{tuple(edge_attr.shape)}  "
+          f"device:{DEVICE}")
+    if DEVICE.type == "cuda":
+        allocated = torch.cuda.memory_allocated(0) / 1e9
+        print(f"  GPU mem after tensor: {allocated:.2f} GB")
     return X_t, edge_index, edge_attr, node_list, node_types
 
 
@@ -302,41 +366,75 @@ class EdgeAwareGATLayer(nn.Module):
         nn.init.xavier_uniform_(self.W)
         nn.init.xavier_uniform_(self.a.unsqueeze(0))
 
-    def forward(self, x, edge_index, edge_attr, degree_src=None):
+    def forward(self, x, edge_index, edge_attr, degree_src=None,
+                chunk_size: int = 200_000):
+        """
+        chunk_size: 엣지를 분할 처리하여 VRAM OOM 방지.
+                    엣지 700만 개 × 24GB GPU → 50만 청크로 분할.
+        """
         N   = x.size(0)
         src = edge_index[0]
         dst = edge_index[1]
+        E   = src.size(0)
 
-        Wh     = torch.einsum("nf,hfo->nho", x, self.W)
-        Wh_src = Wh[src]
-        Wh_dst = Wh[dst]
-        ef     = self.W_edge(edge_attr).unsqueeze(1).expand(-1, self.n_heads, -1)
-        cat    = torch.cat([Wh_src, Wh_dst, ef], dim=2)
-        e      = (cat * self.a.unsqueeze(0)).sum(dim=2)
-        e      = self.leaky(e)
+        # 1. 노드 변환: (N, n_heads, F_out) — 한 번만 계산
+        Wh = torch.einsum("nf,hfo->nho", x, self.W)
 
-        if degree_src is not None:
-            scale = 1.0 / torch.sqrt(degree_src.float().clamp(min=1)).unsqueeze(1)
-            e     = e * scale
+        # 2. e_max 계산 (no_grad: backward에서 inplace 충돌 방지)
+        with torch.no_grad():
+            e_max = torch.full((N, self.n_heads), -1e9, device=x.device)
+            for s in range(0, E, chunk_size):
+                s_idx = src[s:s+chunk_size]
+                d_idx = dst[s:s+chunk_size]
+                ef_c  = self.W_edge(edge_attr[s:s+chunk_size]).unsqueeze(1).expand(-1, self.n_heads, -1)
+                cat_c = torch.cat([Wh[s_idx].detach(), Wh[d_idx].detach(), ef_c], dim=2)
+                e_c   = self.leaky((cat_c * self.a.unsqueeze(0)).sum(dim=2))
+                if degree_src is not None:
+                    scale = 1.0 / torch.sqrt(degree_src[s:s+chunk_size].float().clamp(min=1)).unsqueeze(1)
+                    e_c   = e_c * scale
+                e_max.scatter_reduce_(0, s_idx.unsqueeze(1).expand_as(e_c), e_c,
+                                      reduce="amax", include_self=True)
+            e_max = e_max.detach()   # gradient graph 분리
 
-        e_max = torch.zeros(N, self.n_heads, device=x.device)
-        e_max.scatter_reduce_(0, src.unsqueeze(1).expand_as(e), e,
-                              reduce="amax", include_self=True)
-        e_exp = torch.exp(e - e_max[src])
-        e_sum = torch.zeros(N, self.n_heads, device=x.device)
-        e_sum.scatter_add_(0, src.unsqueeze(1).expand_as(e_exp), e_exp)
-        alpha = e_exp / (e_sum[src] + 1e-16)
-        alpha = self.dropout(alpha)
+            # e_sum 계산 (no_grad)
+            e_sum = torch.zeros(N, self.n_heads, device=x.device)
+            for s in range(0, E, chunk_size):
+                s_idx = src[s:s+chunk_size]
+                d_idx = dst[s:s+chunk_size]
+                ef_c  = self.W_edge(edge_attr[s:s+chunk_size]).unsqueeze(1).expand(-1, self.n_heads, -1)
+                cat_c = torch.cat([Wh[s_idx].detach(), Wh[d_idx].detach(), ef_c], dim=2)
+                e_c   = self.leaky((cat_c * self.a.unsqueeze(0)).sum(dim=2))
+                if degree_src is not None:
+                    scale = 1.0 / torch.sqrt(degree_src[s:s+chunk_size].float().clamp(min=1)).unsqueeze(1)
+                    e_c   = e_c * scale
+                e_exp_c = torch.exp(e_c - e_max[s_idx])
+                e_sum.scatter_add_(0, s_idx.unsqueeze(1).expand_as(e_exp_c), e_exp_c)
+            e_sum = e_sum.detach()
 
-        msg = Wh_dst * alpha.unsqueeze(2)
-        out = torch.zeros(N, self.n_heads, self.F_out, device=x.device)
-        out.scatter_add_(0, src.view(-1, 1, 1).expand_as(msg), msg)
+        # Pass 3: gradient 포함 alpha 계산 + 메시지 집계
+        out   = torch.zeros(N, self.n_heads, self.F_out, device=x.device)
+        alpha_all = []
+        for s in range(0, E, chunk_size):
+            s_idx = src[s:s+chunk_size]
+            d_idx = dst[s:s+chunk_size]
+            ef_c  = self.W_edge(edge_attr[s:s+chunk_size]).unsqueeze(1).expand(-1, self.n_heads, -1)
+            cat_c = torch.cat([Wh[s_idx], Wh[d_idx], ef_c], dim=2)
+            e_c   = self.leaky((cat_c * self.a.unsqueeze(0)).sum(dim=2))
+            if degree_src is not None:
+                scale = 1.0 / torch.sqrt(degree_src[s:s+chunk_size].float().clamp(min=1)).unsqueeze(1)
+                e_c   = e_c * scale
+            e_exp_c = torch.exp(e_c - e_max[s_idx])
+            alpha_c = self.dropout(e_exp_c / (e_sum[s_idx] + 1e-16))
+            alpha_all.append(alpha_c.detach())   # attention은 detach (저장용)
+            msg_c = Wh[d_idx] * alpha_c.unsqueeze(2)
+            out.scatter_add_(0, s_idx.view(-1,1,1).expand_as(msg_c), msg_c)
+        alpha_all = torch.cat(alpha_all, dim=0)
 
         if self.concat:
             out = out.view(N, self.n_heads * self.F_out)
         else:
             out = out.mean(dim=1)
-        return self.elu(out), alpha
+        return self.elu(out), alpha_all
 
 
 # ══════════════════════════════════════════════════════════
@@ -397,7 +495,7 @@ def _sample_negative_edges(pos_edge, N, n_sample, existing_set):
         u, v = np.random.randint(0, N), np.random.randint(0, N)
         if u != v and (u, v) not in existing_set and (v, u) not in existing_set:
             neg.append((u, v))
-    return torch.tensor(neg, dtype=torch.long).t()
+    return torch.tensor(neg, dtype=torch.long).t().to(DEVICE)
 
 
 # ══════════════════════════════════════════════════════════
@@ -405,38 +503,38 @@ def _sample_negative_edges(pos_edge, N, n_sample, existing_set):
 # ══════════════════════════════════════════════════════════
 def train_gat(G, X, edge_index, edge_attr, node_types,
               n_epochs=200, lr=0.001, patience=20,
-              batch_size=4096, seed=42):
+              batch_size=4096, seed=42, n_heads=8, hidden=16):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
     N  = X.size(0)
     E  = edge_index.size(1) // 2
 
-    degree = torch.zeros(N, dtype=torch.long)
+    degree = torch.zeros(N, dtype=torch.long, device=DEVICE)
     degree.scatter_add_(0, edge_index[0],
-                        torch.ones(edge_index.size(1), dtype=torch.long))
+                        torch.ones(edge_index.size(1), dtype=torch.long, device=DEVICE))
     degree_src = degree[edge_index[0]]
 
-    uni_idx   = torch.arange(0, edge_index.size(1), 2)
+    uni_idx   = torch.arange(0, edge_index.size(1), 2, device=DEVICE)
     uni_edges = edge_index[:, uni_idx]
 
-    perm    = torch.randperm(E)
+    perm    = torch.randperm(E, device=DEVICE)
     n_train = int(E * 0.8)
     n_val   = int(E * 0.1)
     train_e = uni_edges[:, perm[:n_train]]
     val_e   = uni_edges[:, perm[n_train:n_train + n_val]]
 
-    existing_set = set(zip(edge_index[0].tolist(), edge_index[1].tolist()))
+    existing_set = set(zip(edge_index[0].cpu().tolist(), edge_index[1].cpu().tolist()))
 
-    model     = HeterogeneousGAT(F_in=X.size(1), hidden=16, out=16,
-                                  n_heads=8, F_edge=edge_attr.size(1))
+    model     = HeterogeneousGAT(F_in=X.size(1), hidden=hidden, out=hidden,
+                                  n_heads=n_heads, F_edge=edge_attr.size(1)).to(DEVICE)
     criterion = LinkPredLoss(drug_weight=10.0, reg_lambda=0.01)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     best_val, no_improve, best_state = float("inf"), 0, None
 
-    print(f"\n[GAT] 학습 시작 | 노드:{N:,} 엣지:{E:,} | epochs:{n_epochs} patience:{patience}")
-    print(f"  full-graph forward / link-pred batch:{batch_size} lr:{lr}")
+    print(f"\n[GAT] 학습 시작 | device:{DEVICE} | 노드:{N:,} 엣지:{E:,} | epochs:{n_epochs} patience:{patience}")
+    print(f"  full-graph forward / link-pred batch:{batch_size} lr:{lr} n_heads:{n_heads} hidden:{hidden}")
 
     for epoch in range(1, n_epochs + 1):
         # epoch당 1회 full-graph forward
@@ -486,18 +584,19 @@ def train_gat(G, X, edge_index, edge_attr, node_types,
 def extract_directed_attention(model, X, edge_index, edge_attr,
                                 node_types, node_list):
     N = X.size(0)
-    degree = torch.zeros(N, dtype=torch.long)
+    degree = torch.zeros(N, dtype=torch.long, device=DEVICE)
     degree.scatter_add_(0, edge_index[0],
-                        torch.ones(edge_index.size(1), dtype=torch.long))
+                        torch.ones(edge_index.size(1), dtype=torch.long, device=DEVICE))
     degree_src = degree[edge_index[0]]
     model.eval()
     with torch.no_grad():
         _, alpha = model(X, edge_index, edge_attr, node_types, degree_src)
-        alpha_mean = alpha.mean(dim=1).cpu().numpy()
+        alpha_mean = alpha.mean(dim=1).cpu().numpy()  # CPU로 복귀
+    ei_cpu = edge_index.cpu()   # attention dict 구성은 CPU에서
     directed = {
-        (node_list[edge_index[0, e].item()],
-         node_list[edge_index[1, e].item()]): float(alpha_mean[e])
-        for e in range(edge_index.size(1))
+        (node_list[ei_cpu[0, e].item()],
+         node_list[ei_cpu[1, e].item()]): float(alpha_mean[e])
+        for e in range(ei_cpu.size(1))
     }
     print(f"[GAT] attention 추출 완료 | {len(directed):,}개 방향별 엣지")
     return directed
@@ -506,28 +605,44 @@ def extract_directed_attention(model, X, edge_index, edge_attr,
 # ══════════════════════════════════════════════════════════
 # 10. Attention → 전이 확률 캐시 (ver2 동일)
 # ══════════════════════════════════════════════════════════
-def build_attention_neighbor_cache(G, directed_attention, alpha_mix=0.7):
-    """GAT attention(0.7) + 원본 weight(0.3) 혼합 전이 확률 캐시."""
-    cache = {}
+def build_attention_neighbor_cache(G, directed_attention, node_list, alpha_mix=0.7):
+    """
+    GAT attention(0.7) + 원본 weight(0.3) 혼합 전이 확률 캐시.
+    [최적화] 노드명 대신 정수 인덱스 기반 배열로 저장 → pickle/IPC 없이 글로벌 공유.
+    반환: nbrs_arr[i] = np.ndarray(이웃 인덱스들)
+          probs_arr[i] = np.ndarray(전이 확률들)
+    """
+    n2i      = {n: i for i, n in enumerate(node_list)}
+    N        = len(node_list)
+    nbrs_arr  = [None] * N
+    probs_arr = [None] * N
+
     for node in G.nodes():
+        i    = n2i[node]
         nbrs = list(G.neighbors(node))
         if not nbrs:
-            cache[node] = ([], None)
+            nbrs_arr[i]  = np.array([], dtype=np.int32)
+            probs_arr[i] = np.array([], dtype=np.float32)
             continue
+
         gat_w = np.array([
             directed_attention.get((node, nb), 1e-8) for nb in nbrs
-        ], dtype=float)
+        ], dtype=np.float64)
         gat_w = np.clip(gat_w, 1e-8, None)
         gat_w /= gat_w.sum()
 
-        orig_w = np.array([G[node][nb]["weight"] for nb in nbrs], dtype=float)
+        orig_w = np.array([G[node][nb]["weight"] for nb in nbrs], dtype=np.float64)
         orig_w = np.clip(orig_w + 1e-8, 1e-8, None)
         orig_w /= orig_w.sum()
 
         combined  = alpha_mix * gat_w + (1 - alpha_mix) * orig_w
         combined /= combined.sum()
-        cache[node] = (nbrs, combined)
-    return cache
+
+        nbrs_arr[i]  = np.array([n2i[nb] for nb in nbrs], dtype=np.int32)
+        probs_arr[i] = combined.astype(np.float64)
+
+    print(f"[Cache] 전이 확률 캐시 완료 | {N:,} 노드 | 인덱스 기반 numpy 배열")
+    return nbrs_arr, probs_arr
 
 
 # ══════════════════════════════════════════════════════════
@@ -552,25 +667,34 @@ def _progress_monitor(shared_done, total_walks, stop_event):
 
 
 # ══════════════════════════════════════════════════════════
-# 12. RWR 시뮬레이션 (ver2 동일)
+# 12. RWR 시뮬레이션 (글로벌 캐시 최적화 버전)
 # ══════════════════════════════════════════════════════════
-def simulate_random_walk_v3(G, neighbor_cache,
+def simulate_random_walk_v3(G, nbrs_arr, probs_arr, node_list,
                              n_walks=1000, walk_length=100,
-                             restart_prob=0.15, seed=42, n_workers=12):
-    nodes       = list(G.nodes())
-    n_nodes     = len(nodes)
+                             restart_prob=0.15, seed=42, n_workers=None):
+    """
+    [최적화]
+    - neighbor_cache를 글로벌 변수로 공유 → IPC pickle 직렬화 제거
+    - 워커 인자로 노드 인덱스 리스트만 전달 (초경량)
+    - n_workers = CPU 물리 코어 수 (기본값)
+    """
+    n_nodes     = len(node_list)
     total_walks = n_nodes * n_walks
-    n_workers   = min(n_workers, n_nodes, cpu_count())
+
+    if n_workers is None:
+        n_workers = cpu_count()
+    n_workers = min(n_workers, n_nodes)
 
     print(f"\n[RWR-v3] 노드 {n_nodes:,} x {n_walks}회 = {total_walks:,} walks")
-    print(f"  walk_length={walk_length} restart_prob={restart_prob} n_workers={n_workers}")
+    print(f"  walk_length={walk_length} restart_prob={restart_prob} "
+          f"n_workers={n_workers} (CPU cores={cpu_count()})")
+    print(f"  [최적화] 글로벌 캐시 공유 모드 (IPC pickle 제거)")
 
-    chunks      = [nodes[i::n_workers] for i in range(n_workers)]
+    # 노드 인덱스 청크 (워커 인자: 정수 리스트만 → 매우 가벼움)
+    all_idxs = list(range(n_nodes))
+    chunks   = [all_idxs[i::n_workers] for i in range(n_workers)]
+
     shared_done = Value("l", 0)
-    worker_args = [
-        (chunk, neighbor_cache, n_walks, walk_length, restart_prob, seed + i)
-        for i, chunk in enumerate(chunks)
-    ]
 
     stop_event = threading.Event()
     monitor    = threading.Thread(
@@ -582,17 +706,24 @@ def simulate_random_walk_v3(G, neighbor_cache,
 
     t0          = time.time()
     visit_count = Counter()
-    with Pool(processes=n_workers,
-              initializer=_init_worker,
-              initargs=(shared_done,)) as pool:
-        for r in pool.map(_walk_worker, worker_args):
-            visit_count += r
+
+    with Pool(
+        processes   = n_workers,
+        initializer = _init_worker,
+        initargs    = (shared_done, nbrs_arr, probs_arr,
+                       walk_length, restart_prob, n_walks)
+    ) as pool:
+        for r in pool.map(_walk_worker, chunks):
+            # 워커 반환값은 정수 인덱스 기반 Counter → 노드명으로 변환
+            for idx, cnt in r.items():
+                visit_count[node_list[idx]] += cnt
 
     stop_event.set()
     monitor.join()
 
     elapsed = time.time() - t0
-    print(f"[RWR-v3] 완료 | {elapsed:.1f}s | {total_walks/elapsed:,.0f} walks/s | "
+    print(f"[RWR-v3] 완료 | {elapsed:.1f}s | "
+          f"{total_walks/elapsed:,.0f} walks/s | "
           f"총 방문: {sum(visit_count.values()):,}")
     return visit_count
 
@@ -683,6 +814,7 @@ if __name__ == "__main__":
     X, edge_index, edge_attr, node_list, node_types = graph_to_tensors(G)
 
     # 4. GAT 학습
+    # n_heads=4, hidden=8 로 축소: 700만 엣지 × 24GB VRAM 제약
     model = train_gat(
         G, X, edge_index, edge_attr, node_types,
         n_epochs   = 200,
@@ -690,6 +822,8 @@ if __name__ == "__main__":
         patience   = 20,
         batch_size = 4096,
         seed       = 42,
+        n_heads    = 4,
+        hidden     = 8,
     )
 
     # 5. Attention 추출
@@ -697,19 +831,19 @@ if __name__ == "__main__":
         model, X, edge_index, edge_attr, node_types, node_list
     )
 
-    # 6. 전이 확률 캐시 (GAT 0.7 + 원본 0.3)
-    neighbor_cache = build_attention_neighbor_cache(
-        G, directed_attention, alpha_mix=0.7
+    # 6. 전이 확률 캐시 (GAT 0.7 + 원본 0.3) → 인덱스 기반 numpy 배열
+    nbrs_arr, probs_arr = build_attention_neighbor_cache(
+        G, directed_attention, node_list, alpha_mix=0.7
     )
 
-    # 7. GAT+RWR 시뮬레이션
+    # 7. GAT+RWR 시뮬레이션 (최적화: 글로벌 캐시 공유, n_workers=CPU 코어 수)
     visit_count = simulate_random_walk_v3(
-        G, neighbor_cache,
+        G, nbrs_arr, probs_arr, node_list,
         n_walks      = 1000,
         walk_length  = 100,
         restart_prob = 0.15,
         seed         = 42,
-        n_workers    = 12,
+        n_workers    = None,   # None = cpu_count() 자동
     )
 
     # 8. 결과 출력 및 저장
